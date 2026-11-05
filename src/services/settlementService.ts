@@ -325,4 +325,234 @@ export async function unassignSettlement(userId: string, settlementId: string) {
   });
 }
 
+type LayoutBed = {
+  id?: string;
+  number: number;
+  blocked: boolean;
+  applicationId: string | null;
+};
+
+type LayoutRoom = {
+  id?: string;
+  number: string;
+  floor: number;
+  gender: "MALE" | "FEMALE";
+  accessible: boolean;
+  closed: boolean;
+  beds: LayoutBed[];
+};
+
+export async function saveHousingLayout(userId: string, buildingId: string, rooms: LayoutRoom[]) {
+  const roomNumbers = rooms.map((room) => room.number);
+  if (new Set(roomNumbers).size !== roomNumbers.length) {
+    throw new HttpError(400, "Номера комнат не должны повторяться");
+  }
+  const wantedApplications = new Map<string, { roomNumber: string; bedNumber: number; gender: "MALE" | "FEMALE"; closed: boolean; blocked: boolean }>();
+  for (const room of rooms) {
+    const bedNumbers = new Set<number>();
+    for (const bed of room.beds) {
+      if (bedNumbers.has(bed.number)) throw new HttpError(400, `В комнате ${room.number} повторяется номер койки`);
+      bedNumbers.add(bed.number);
+      if (!bed.applicationId) continue;
+      if (wantedApplications.has(bed.applicationId)) throw new HttpError(400, "Студент указан сразу на двух койках");
+      if (room.closed) throw new HttpError(400, `Комната ${room.number} закрыта, на неё нельзя заселять`);
+      if (bed.blocked) throw new HttpError(400, `Койка ${bed.number} в комнате ${room.number} заблокирована`);
+      wantedApplications.set(bed.applicationId, {
+        roomNumber: room.number,
+        bedNumber: bed.number,
+        gender: room.gender,
+        closed: room.closed,
+        blocked: bed.blocked,
+      });
+    }
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const building = await tx.building.findUnique({
+      where: { id: buildingId },
+      include: { rooms: { include: { beds: { include: { settlement: true } } } } },
+    });
+    if (!building) throw new HttpError(404, "Корпус не найден");
+
+    const applications = wantedApplications.size
+      ? await tx.application.findMany({
+          where: { id: { in: [...wantedApplications.keys()] } },
+          include: {
+            applicant: true,
+            documents: true,
+            settlement: { include: { bed: { include: { room: true } } } },
+          },
+        })
+      : [];
+    if (applications.length !== wantedApplications.size) throw new HttpError(400, "В списке есть неизвестная заявка");
+
+    const keptOrders = new Map<string, string>();
+    for (const application of applications) {
+      const target = wantedApplications.get(application.id)!;
+      const gender = application.applicant.gender;
+      if (gender !== "MALE" && gender !== "FEMALE") throw new HttpError(400, `У ${fullName(application.applicant)} не указан пол`);
+      if (gender !== target.gender) {
+        throw new HttpError(400, `${fullName(application.applicant)} не подходит в комнату ${target.roomNumber}: другой пол`);
+      }
+      const settlement = application.settlement;
+      if (settlement && settlement.bed.room.buildingId !== buildingId) {
+        throw new HttpError(400, `${fullName(application.applicant)} уже заселён в другом корпусе`);
+      }
+      if (!settlement) {
+        if (!["APPROVED", "WAITLIST"].includes(application.status)) {
+          throw new HttpError(400, `${fullName(application.applicant)} ещё не допущен к заселению`);
+        }
+        const missing = missingDocumentLabels(
+          application.applicant.priorityCategory,
+          application.documents.filter((doc) => doc.status === "VERIFIED").map((doc) => doc.type),
+        );
+        if (missing.length > 0) throw new HttpError(400, `${fullName(application.applicant)}: не проверены документы: ${missing.join(", ")}`);
+      } else {
+        keptOrders.set(application.id, settlement.orderNumber);
+      }
+    }
+
+    const currentBeds = building.rooms.flatMap((room) => room.beds);
+    const stayBedByApplication = new Map<string, string>();
+    for (const room of rooms) {
+      for (const bed of room.beds) {
+        if (!bed.id || !bed.applicationId) continue;
+        const current = currentBeds.find((item) => item.id === bed.id);
+        if (current?.settlement?.applicationId === bed.applicationId) stayBedByApplication.set(bed.applicationId, bed.id);
+      }
+    }
+
+    for (const bed of currentBeds) {
+      const settlement = bed.settlement;
+      if (!settlement) continue;
+      if (stayBedByApplication.get(settlement.applicationId) === bed.id) continue;
+      await tx.bed.update({ where: { id: bed.id }, data: { status: "FREE" } });
+      await tx.application.update({ where: { id: settlement.applicationId }, data: { status: "APPROVED" } });
+      await tx.settlement.delete({ where: { id: settlement.id } });
+    }
+
+    const keepRoomIds = new Set(rooms.flatMap((room) => (room.id ? [room.id] : [])));
+    const keepBedIds = new Set(rooms.flatMap((room) => room.beds.flatMap((bed) => (bed.id ? [bed.id] : []))));
+    for (const room of building.rooms) {
+      if (!keepRoomIds.has(room.id)) {
+        await tx.room.delete({ where: { id: room.id } });
+        continue;
+      }
+      for (const bed of room.beds) {
+        if (!keepBedIds.has(bed.id)) await tx.bed.delete({ where: { id: bed.id } });
+      }
+    }
+
+    for (const room of rooms) {
+      if (!room.id) continue;
+      await tx.room.update({
+        where: { id: room.id },
+        data: {
+          number: room.number,
+          floor: room.floor,
+          gender: room.gender,
+          accessible: room.accessible,
+          status: room.closed ? "CLOSED" : "ACTIVE",
+        },
+      });
+      for (const bed of room.beds) {
+        if (!bed.id) {
+          await tx.bed.create({
+            data: { roomId: room.id, number: bed.number, status: bed.blocked ? "BLOCKED" : "FREE" },
+          });
+        } else if (!stayBedByApplication.has(bed.applicationId ?? "")) {
+          await tx.bed.update({
+            where: { id: bed.id },
+            data: { number: bed.number, status: bed.blocked ? "BLOCKED" : "FREE" },
+          });
+        }
+      }
+    }
+
+    for (const room of rooms) {
+      if (room.id) continue;
+      await tx.room.create({
+        data: {
+          buildingId,
+          number: room.number,
+          floor: room.floor,
+          gender: room.gender,
+          accessible: room.accessible,
+          status: room.closed ? "CLOSED" : "ACTIVE",
+          beds: {
+            create: room.beds.map((bed) => ({
+              number: bed.number,
+              status: bed.blocked ? "BLOCKED" : "FREE",
+            })),
+          },
+        },
+      });
+    }
+
+    const freshBeds = await tx.bed.findMany({
+      where: { room: { buildingId } },
+      include: { room: true },
+    });
+    const bedByPlace = new Map(freshBeds.map((bed) => [`${bed.room.number}#${bed.number}`, bed]));
+    const campaign = await tx.campaign.findUnique({ where: { id: "default" } });
+
+    const orderedApplications = [...applications].sort(
+      (left, right) => Number(keptOrders.has(right.id)) - Number(keptOrders.has(left.id)),
+    );
+    for (const application of orderedApplications) {
+      if (stayBedByApplication.has(application.id)) continue;
+      const target = wantedApplications.get(application.id)!;
+      const bed = bedByPlace.get(`${target.roomNumber}#${target.bedNumber}`);
+      if (!bed) throw new HttpError(400, `Не найдена койка ${target.bedNumber} в комнате ${target.roomNumber}`);
+      const gender = application.applicant.gender as "MALE" | "FEMALE";
+      await takeBed(tx, bed.id, gender);
+      const orderNumber = keptOrders.get(application.id) ?? (await nextOrderNumber(tx));
+      const settlement = await tx.settlement.create({
+        data: {
+          applicationId: application.id,
+          bedId: bed.id,
+          assignedById: userId,
+          method: "MANUAL",
+          orderNumber,
+          checkInFrom: campaign?.checkInFrom,
+          checkInUntil: campaign?.checkInUntil,
+        },
+      });
+      await tx.application.update({ where: { id: application.id }, data: { status: "SETTLED" } });
+      await notify(
+        tx,
+        application.applicant.userId,
+        keptOrders.has(application.id) ? "Место в общежитии изменено" : "Назначено место в общежитии",
+        `${building.name}, комната ${bed.room.number}, койка ${bed.number}. Направление ${orderNumber}.`,
+      );
+      await writeAudit(tx, userId, keptOrders.has(application.id) ? "Переселение" : "Ручное назначение", "Settlement", settlement.id, {
+        name: fullName(application.applicant),
+        building: building.name,
+        room: bed.room.number,
+        bed: bed.number,
+      });
+    }
+
+    const removed = [...building.rooms.flatMap((room) => room.beds.flatMap((bed) => (bed.settlement ? [bed.settlement] : [])))]
+      .filter((settlement) => !wantedApplications.has(settlement.applicationId));
+    for (const settlement of removed) {
+      const application = await tx.application.findUnique({
+        where: { id: settlement.applicationId },
+        include: { applicant: true },
+      });
+      if (!application) continue;
+      await notify(tx, application.applicant.userId, "Назначение места отменено", `Направление ${settlement.orderNumber} отозвано.`);
+      await writeAudit(tx, userId, "Снятие с места", "Settlement", settlement.id, {
+        name: fullName(application.applicant),
+        orderNumber: settlement.orderNumber,
+      });
+    }
+
+    await writeAudit(tx, userId, "Правка жилого фонда", "Building", buildingId, {
+      rooms: rooms.length,
+      beds: rooms.reduce((sum, room) => sum + room.beds.length, 0),
+    });
+  }, { timeout: 30000 });
+}
+
 export type AppDb = PrismaClient;
