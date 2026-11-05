@@ -127,7 +127,7 @@ importRouter.post(
       if (!indexes.has(required)) throw new HttpError(400, "В шапке нужны колонки ФИО, Пол и Email");
     }
 
-    const created: { email: string; password: string; name: string; distanceKm: number | null }[] = [];
+    const created: { email: string; name: string; distanceKm: number | null }[] = [];
     const updated: { email: string; name: string; distanceKm: number | null }[] = [];
     const errors: { row: number; message: string }[] = [];
 
@@ -146,20 +146,27 @@ importRouter.post(
         if (!parts.lastName || !parts.firstName) throw new Error("ФИО должно содержать фамилию и имя");
         const score = Number(read("score") || 0);
         if (!Number.isInteger(score) || score < 0 || score > 400) throw new Error("Балл должен быть целым от 0 до 400");
+        const birthDate = parseBirth(read("birthDate"));
+        if (!birthDate) throw new Error("Укажите дату рождения");
         const city = read("city");
+        const region = read("region");
+        const faculty = read("faculty");
+        const specialty = read("specialty");
+        if (!city || !region) throw new Error("Укажите город и регион");
+        if (!faculty || !specialty) throw new Error("Укажите факультет и направление");
         const distanceKm = distanceKmFromCity(city);
         const data = {
           ...parts,
           gender,
-          birthDate: parseBirth(read("birthDate")),
+          birthDate,
           city,
-          region: read("region"),
+          region,
           street: read("street"),
           house: read("house"),
           apartment: read("apartment"),
           distanceKm,
-          faculty: read("faculty"),
-          specialty: read("specialty"),
+          faculty,
+          specialty,
           admissionScore: score,
           priorityCategory: parseCategory(read("category")),
           imported: true,
@@ -175,23 +182,32 @@ importRouter.post(
               user: { update: { fullName: fullName(data), phone } },
             },
           });
+          const application = await prisma.application.findUnique({ where: { applicantId: existing.applicant.id } });
+          if (!application) {
+            await prisma.application.create({
+              data: { applicantId: existing.applicant.id, status: "SUBMITTED", submittedAt: new Date() },
+            });
+          }
           updated.push({ email, name: fullName(data), distanceKm });
         } else if (existing) {
-          throw new Error("Пользователь без анкеты абитуриента");
+          throw new Error("Почта уже занята");
         } else {
-          const password = `Hs${randomBytes(4).toString("hex")}`;
           await prisma.user.create({
             data: {
               email,
-              passwordHash: await bcrypt.hash(password, 10),
+              passwordHash: await bcrypt.hash(randomBytes(24).toString("hex"), 10),
               role: "APPLICANT",
               fullName: fullName(data),
               phone,
-              mustChangePassword: true,
-              applicant: { create: data },
+              applicant: {
+                create: {
+                  ...data,
+                  application: { create: { status: "SUBMITTED", submittedAt: new Date() } },
+                },
+              },
             },
           });
-          created.push({ email, password, name: fullName(data), distanceKm });
+          created.push({ email, name: fullName(data), distanceKm });
         }
       } catch (error) {
         errors.push({ row: rowNumber, message: error instanceof Error ? error.message : "Ошибка строки" });

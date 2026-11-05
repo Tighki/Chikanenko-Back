@@ -5,7 +5,8 @@ import { asyncRoute, HttpError } from "../middleware/error.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { institute } from "../domain/distance.js";
 import { missingDocumentLabels, fullName } from "../domain/labels.js";
-import { profileProblems } from "../domain/profile.js";
+import { isDocumentType, profileProblems } from "../domain/profile.js";
+import { uploadDocument } from "../middleware/upload.js";
 import { notify, writeAudit } from "../services/audit.js";
 
 const reviewSchema = z.object({
@@ -179,6 +180,29 @@ staffRouter.post(
       name: fullName(application.applicant),
     });
     res.json({ application: updated });
+  }),
+);
+
+staffRouter.post(
+  "/applications/:id/documents",
+  uploadDocument.single("file"),
+  asyncRoute(async (req, res) => {
+    const application = await prisma.application.findUnique({ where: { id: String(req.params.id) } });
+    if (!application) throw new HttpError(404, "Заявка не найдена");
+    if (application.status === "SETTLED") throw new HttpError(400, "К заселённой заявке документы не добавляют");
+    const type = String(req.body.type ?? "");
+    if (!isDocumentType(type)) throw new HttpError(400, "Неизвестный тип документа");
+    if (!req.file) throw new HttpError(400, "Выберите файл");
+    const document = await prisma.document.create({
+      data: {
+        applicationId: application.id,
+        type,
+        originalName: req.file.originalname,
+        storedName: req.file.filename,
+      },
+    });
+    await writeAudit(prisma, req.user!.id, "Загрузка документа", "Document", document.id, { type });
+    res.status(201).json({ document });
   }),
 );
 

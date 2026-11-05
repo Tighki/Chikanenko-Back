@@ -59,6 +59,7 @@ adminRouter.get(
   "/users",
   asyncRoute(async (_req, res) => {
     const users = await prisma.user.findMany({
+      where: { role: { in: ["STAFF", "ADMIN"] } },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
