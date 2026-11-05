@@ -1,0 +1,44 @@
+{
+  "name": "hostel-settlement-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:local": "tsx scripts/embedded-db.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:setup": "prisma migrate deploy && tsx prisma/seed.ts",
+    "db:seed": "tsx prisma/seed.ts",
+    "check": "tsx scripts/check-algorithm.ts",
+    "prisma:generate": "prisma generate"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.6.0",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.2",
+    "pdfkit": "^0.16.0",
+    "zod": "^3.24.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.15.3",
+    "@types/pdfkit": "^0.13.9",
+    "embedded-postgres": "^18.1.0-beta.1",
+    "prisma": "^6.6.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

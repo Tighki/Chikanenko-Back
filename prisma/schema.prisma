@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  APPLICANT
+  STAFF
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum PriorityCategory {
+  ORPHAN
+  DISABILITY
+  SOCIAL
+  OUT_OF_TOWN
+  NONE
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  WAITLIST
+  SETTLED
+  CANCELLED
+}
+
+enum DocumentType {
+  PASSPORT
+  ORPHAN
+  DISABILITY
+  LARGE_FAMILY
+  LOW_INCOME
+  REGISTRATION
+  OTHER
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum RoomStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum BedStatus {
+  FREE
+  OCCUPIED
+  BLOCKED
+}
+
+enum SettlementMethod {
+  AUTO
+  MANUAL
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  passwordHash       String
+  role               Role
+  fullName           String
+  phone              String?
+  mustChangePassword Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  applicant     Applicant?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  reviewedDocs  Document[]      @relation("DocumentReviewer")
+  settlements   Settlement[]    @relation("SettlementAssignee")
+  runs          SettlementRun[] @relation("RunStarter")
+}
+
+model Applicant {
+  id               String           @id @default(cuid())
+  userId           String           @unique
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastName         String           @default("")
+  firstName        String           @default("")
+  middleName       String?
+  birthDate        DateTime?
+  gender           Gender?
+  city             String           @default("")
+  region           String           @default("")
+  street           String           @default("")
+  house            String           @default("")
+  apartment        String           @default("")
+  distanceKm       Int?
+  faculty          String           @default("")
+  specialty        String           @default("")
+  admissionScore   Int              @default(0)
+  priorityCategory PriorityCategory @default(NONE)
+  imported         Boolean          @default(false)
+
+  application Application?
+}
+
+model Application {
+  id           String            @id @default(cuid())
+  applicantId  String            @unique
+  applicant    Applicant         @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  status       ApplicationStatus @default(DRAFT)
+  submittedAt  DateTime?
+  comment      String?
+  staffComment String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  documents  Document[]
+  settlement Settlement?
+
+  @@index([status])
+}
+
+model Document {
+  id            String         @id @default(cuid())
+  applicationId String
+  application   Application    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          DocumentType
+  originalName  String
+  storedName    String
+  status        DocumentStatus @default(PENDING)
+  reviewComment String?
+  reviewedById  String?
+  reviewedBy    User?          @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  uploadedAt    DateTime       @default(now())
+}
+
+model Building {
+  id      String @id @default(cuid())
+  name    String
+  address String
+  gender  Gender
+  rooms   Room[]
+}
+
+model Room {
+  id         String     @id @default(cuid())
+  buildingId String
+  building   Building   @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  number     String
+  floor      Int
+  gender     Gender
+  accessible Boolean    @default(false)
+  status     RoomStatus @default(ACTIVE)
+  beds       Bed[]
+
+  @@unique([buildingId, number])
+}
+
+model Bed {
+  id         String    @id @default(cuid())
+  roomId     String
+  room       Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  number     Int
+  status     BedStatus @default(FREE)
+  settlement Settlement?
+
+  @@unique([roomId, number])
+  @@index([status])
+}
+
+model Settlement {
+  id            String           @id @default(cuid())
+  applicationId String           @unique
+  application   Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  bedId         String           @unique
+  bed           Bed              @relation(fields: [bedId], references: [id])
+  assignedAt    DateTime         @default(now())
+  assignedById  String?
+  assignedBy    User?            @relation("SettlementAssignee", fields: [assignedById], references: [id])
+  method        SettlementMethod
+  orderNumber   String           @unique
+  checkInFrom   DateTime?
+  checkInUntil  DateTime?
+  runId         String?
+  run           SettlementRun?   @relation(fields: [runId], references: [id])
+}
+
+model SettlementRun {
+  id             String       @id @default(cuid())
+  startedAt      DateTime     @default(now())
+  finishedAt     DateTime?
+  startedById    String
+  startedBy      User         @relation("RunStarter", fields: [startedById], references: [id])
+  groupByFaculty Boolean      @default(false)
+  summary        Json
+  settlements    Settlement[]
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Campaign {
+  id           String   @id @default("default")
+  name         String
+  startsAt     DateTime
+  endsAt       DateTime
+  checkInFrom  DateTime
+  checkInUntil DateTime
+  active       Boolean  @default(true)
+}
+
+model PriorityRule {
+  category PriorityCategory @id
+  rank     Int
+  title    String
+}
