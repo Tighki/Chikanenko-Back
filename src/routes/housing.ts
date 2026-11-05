@@ -15,6 +15,7 @@ const roomSchema = z.object({
   buildingId: z.string().min(1),
   number: z.string().trim().min(1, "Укажите номер").max(10),
   floor: z.coerce.number().int().min(1).max(30),
+  gender: z.enum(["MALE", "FEMALE"]).optional(),
   accessible: z.boolean().optional().default(false),
   bedCount: z.coerce.number().int().min(1, "Нужна хотя бы одна койка").max(8),
 });
@@ -81,7 +82,7 @@ housingRouter.post(
         buildingId: building.id,
         number: body.number,
         floor: body.floor,
-        gender: building.gender,
+        gender: body.gender ?? building.gender,
         accessible: body.accessible,
         beds: {
           create: Array.from({ length: body.bedCount }, (_, index) => ({ number: index + 1 })),

@@ -21,7 +21,7 @@ function bed(partial: Partial<PlanBed> & Pick<PlanBed, "id" | "gender">): PlanBe
     floor: partial.floor ?? 1,
     accessible: partial.accessible ?? false,
     roomActive: partial.roomActive ?? true,
-    buildingName: partial.buildingName ?? "Северный",
+    buildingName: partial.buildingName ?? "Общежитие",
     occupiedFaculties: partial.occupiedFaculties ?? [],
     ...partial,
   };
@@ -68,7 +68,7 @@ const female = applicant({
 const beds: PlanBed[] = [
   bed({ id: "acc", gender: "MALE", accessible: true, roomId: "acc", roomNumber: "101" }),
   bed({ id: "reg", gender: "MALE", accessible: false, roomId: "reg", roomNumber: "102", number: 1 }),
-  bed({ id: "f", gender: "FEMALE", accessible: false, roomId: "f", roomNumber: "101", buildingName: "Южный" }),
+  bed({ id: "f", gender: "FEMALE", accessible: false, roomId: "f", roomNumber: "301", buildingName: "Общежитие" }),
 ];
 
 const plan = buildSettlementPlan([highScore, disabled, female, orphan], beds, { groupByFaculty: false });
