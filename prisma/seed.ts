@@ -70,7 +70,7 @@ async function main() {
   });
 
   const hostel = await prisma.building.create({
-    data: { name: "Общежитие", address: "ул. Студенческая, 1", gender: "MALE" },
+    data: { name: "Общежитие", address: "ул. Студенческая, 1" },
   });
 
   async function addRoom(buildingId: string, gender: "MALE" | "FEMALE", number: string, floor: number, accessible: boolean, beds: number) {
@@ -95,7 +95,7 @@ async function main() {
   await prisma.auditLog.create({
     data: {
       userId: staff.id,
-      action: "Подготовка демонстрационных данных",
+      action: "Начальное заполнение базы",
       entity: "Campaign",
       entityId: "default",
     },

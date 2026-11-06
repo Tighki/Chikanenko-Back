@@ -146,7 +146,6 @@ model Building {
   id      String @id @default(cuid())
   name    String
   address String
-  gender  Gender
   rooms   Room[]
 }
 

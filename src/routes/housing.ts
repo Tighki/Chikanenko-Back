@@ -10,7 +10,6 @@ import { saveHousingLayout } from "../services/settlementService.js";
 const buildingSchema = z.object({
   name: z.string().trim().min(1, "Укажите название").max(80),
   address: z.string().trim().min(1, "Укажите адрес").max(160),
-  gender: z.enum(["MALE", "FEMALE"]),
 });
 
 const roomSchema = z.object({
@@ -188,7 +187,7 @@ housingRouter.post(
         buildingId: building.id,
         number: body.number,
         floor: body.floor,
-        gender: body.gender ?? building.gender,
+        gender: body.gender ?? "MALE",
         accessible: body.accessible,
         beds: {
           create: Array.from({ length: body.bedCount }, (_, index) => ({ number: index + 1 })),
