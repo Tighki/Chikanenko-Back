@@ -4,16 +4,10 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncRoute, HttpError } from "../middleware/error.js";
 import { requireAuth, signToken } from "../middleware/auth.js";
-import { writeAudit } from "../services/audit.js";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Укажите корректную почту"),
   password: z.string().min(1, "Введите пароль"),
-});
-
-const passwordSchema = z.object({
-  currentPassword: z.string().min(1, "Введите текущий пароль"),
-  newPassword: z.string().min(6, "Новый пароль не короче 6 символов").max(80),
 });
 
 function publicUser(user: {
@@ -22,7 +16,6 @@ function publicUser(user: {
   fullName: string;
   role: "APPLICANT" | "STAFF" | "ADMIN";
   phone: string | null;
-  mustChangePassword: boolean;
 }) {
   return {
     id: user.id,
@@ -30,7 +23,6 @@ function publicUser(user: {
     fullName: user.fullName,
     role: user.role,
     phone: user.phone,
-    mustChangePassword: user.mustChangePassword,
   };
 }
 
@@ -62,20 +54,3 @@ authRouter.get(
   }),
 );
 
-authRouter.post(
-  "/password",
-  requireAuth,
-  asyncRoute(async (req, res) => {
-    const body = passwordSchema.parse(req.body);
-    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
-    if (!user || !(await bcrypt.compare(body.currentPassword, user.passwordHash))) {
-      throw new HttpError(400, "Текущий пароль неверный");
-    }
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash: await bcrypt.hash(body.newPassword, 10), mustChangePassword: false },
-    });
-    await writeAudit(prisma, user.id, "Смена пароля", "User", user.id);
-    res.json({ ok: true });
-  }),
-);

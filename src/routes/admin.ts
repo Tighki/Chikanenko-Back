@@ -4,7 +4,6 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { asyncRoute, HttpError } from "../middleware/error.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
-import { campaignIsOpen } from "../domain/labels.js";
 import { writeAudit } from "../services/audit.js";
 
 const userSchema = z.object({
@@ -27,11 +26,8 @@ const prioritySchema = z.object({
 
 const campaignSchema = z.object({
   name: z.string().trim().min(3).max(160),
-  startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   checkInFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   checkInUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  active: z.boolean(),
 });
 
 function dateStart(value: string) {
@@ -42,13 +38,21 @@ function dateEnd(value: string) {
   return new Date(`${value}T23:59:59`);
 }
 
+function publicCampaign(campaign: { name: string; checkInFrom: Date; checkInUntil: Date }) {
+  return {
+    name: campaign.name,
+    checkInFrom: campaign.checkInFrom,
+    checkInUntil: campaign.checkInUntil,
+  };
+}
+
 export const campaignRouter = Router();
 
 campaignRouter.get(
   "/",
   asyncRoute(async (_req, res) => {
     const campaign = await prisma.campaign.findUnique({ where: { id: "default" } });
-    res.json({ campaign: campaign ? { ...campaign, isOpen: campaignIsOpen(campaign) } : null });
+    res.json({ campaign: campaign ? publicCampaign(campaign) : null });
   }),
 );
 
@@ -67,7 +71,6 @@ adminRouter.get(
         fullName: true,
         phone: true,
         role: true,
-        mustChangePassword: true,
         createdAt: true,
       },
     });
@@ -89,7 +92,6 @@ adminRouter.post(
         phone: body.phone || null,
         role: body.role,
         passwordHash: await bcrypt.hash(body.password, 10),
-        mustChangePassword: true,
       },
     });
     await writeAudit(prisma, req.user!.id, "Создание пользователя", "User", user.id, { email, role: body.role });
@@ -137,19 +139,24 @@ adminRouter.put(
   "/campaign",
   asyncRoute(async (req, res) => {
     const body = campaignSchema.parse(req.body);
-    const startsAt = dateStart(body.startsAt);
-    const endsAt = dateEnd(body.endsAt);
     const checkInFrom = dateStart(body.checkInFrom);
     const checkInUntil = dateEnd(body.checkInUntil);
-    if (endsAt < startsAt) throw new HttpError(400, "Окончание приёма раньше начала");
     if (checkInUntil < checkInFrom) throw new HttpError(400, "Окончание заселения раньше начала");
     const campaign = await prisma.campaign.upsert({
       where: { id: "default" },
-      update: { name: body.name, startsAt, endsAt, checkInFrom, checkInUntil, active: body.active },
-      create: { id: "default", name: body.name, startsAt, endsAt, checkInFrom, checkInUntil, active: body.active },
+      update: { name: body.name, checkInFrom, checkInUntil },
+      create: {
+        id: "default",
+        name: body.name,
+        startsAt: checkInFrom,
+        endsAt: checkInUntil,
+        checkInFrom,
+        checkInUntil,
+        active: true,
+      },
     });
     await writeAudit(prisma, req.user!.id, "Изменение кампании", "Campaign", campaign.id, { name: campaign.name });
-    res.json({ campaign: { ...campaign, isOpen: campaignIsOpen(campaign) } });
+    res.json({ campaign: publicCampaign(campaign) });
   }),
 );
 

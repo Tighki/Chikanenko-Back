@@ -77,10 +77,3 @@ export function fullName(parts: {
 }): string {
   return [parts.lastName, parts.firstName, parts.middleName].filter(Boolean).join(" ");
 }
-
-export function campaignIsOpen(
-  campaign: { active: boolean; startsAt: Date; endsAt: Date },
-  now = new Date(),
-): boolean {
-  return campaign.active && now >= campaign.startsAt && now <= campaign.endsAt;
-}

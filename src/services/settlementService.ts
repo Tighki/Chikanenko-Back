@@ -2,7 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { buildSettlementPlan, type PlanApplicant, type PlanBed, type PlanRow } from "../domain/settlementPlan.js";
 import { CATEGORY_TITLES, fullName, missingDocumentLabels } from "../domain/labels.js";
-import { notify, writeAudit, type Db } from "./audit.js";
+import { writeAudit, type Db } from "./audit.js";
 import { HttpError } from "../middleware/error.js";
 
 const applicationInclude = {
@@ -165,21 +165,11 @@ export async function confirmPlan(userId: string, groupByFaculty: boolean) {
             where: { id: row.applicationId },
             data: { status: "SETTLED" },
           });
-          await notify(
-            tx,
-            row.userId,
-            "Назначено место в общежитии",
-            `${row.buildingName}, комната ${row.roomNumber}, койка ${row.bedNumber}. Направление ${orderNumber}.`,
-          );
         } else if (row.outcome === "WAITLIST") {
-          const current = await tx.application.findUnique({ where: { id: row.applicationId } });
           await tx.application.update({
             where: { id: row.applicationId },
             data: { status: "WAITLIST" },
           });
-          if (current?.status !== "WAITLIST") {
-            await notify(tx, row.userId, "Вы в очереди на заселение", row.reason);
-          }
         }
       }
 
@@ -196,29 +186,6 @@ export async function confirmPlan(userId: string, groupByFaculty: boolean) {
   );
 }
 
-async function loadAssignable(tx: Prisma.TransactionClient, applicationId: string) {
-  const application = await tx.application.findUnique({
-    where: { id: applicationId },
-    include: { applicant: { include: { user: true } }, settlement: true, documents: true },
-  });
-  if (!application) throw new HttpError(404, "Заявка не найдена");
-  if (!["APPROVED", "WAITLIST"].includes(application.status) || application.settlement) {
-    throw new HttpError(400, "Назначить место можно допущенной заявке без койки");
-  }
-  const person = application.applicant;
-  if (person.gender !== "MALE" && person.gender !== "FEMALE") {
-    throw new HttpError(400, "В анкете не указан пол");
-  }
-  const missing = missingDocumentLabels(
-    person.priorityCategory,
-    application.documents.filter((doc) => doc.status === "VERIFIED").map((doc) => doc.type),
-  );
-  if (missing.length > 0) {
-    throw new HttpError(400, `Не проверены документы: ${missing.join(", ")}`);
-  }
-  return application;
-}
-
 async function takeBed(tx: Prisma.TransactionClient, bedId: string, gender: "MALE" | "FEMALE") {
   const bed = await tx.bed.findUnique({
     where: { id: bedId },
@@ -233,96 +200,6 @@ async function takeBed(tx: Prisma.TransactionClient, bedId: string, gender: "MAL
   });
   if (occupied.count !== 1) throw new HttpError(409, "Койку уже заняли");
   return bed;
-}
-
-export async function assignManually(userId: string, applicationId: string, bedId: string) {
-  return prisma.$transaction(async (tx) => {
-    const application = await loadAssignable(tx, applicationId);
-    const gender = application.applicant.gender as "MALE" | "FEMALE";
-    const bed = await takeBed(tx, bedId, gender);
-    const campaign = await tx.campaign.findUnique({ where: { id: "default" } });
-    const orderNumber = await nextOrderNumber(tx);
-    const settlement = await tx.settlement.create({
-      data: {
-        applicationId,
-        bedId,
-        assignedById: userId,
-        method: "MANUAL",
-        orderNumber,
-        checkInFrom: campaign?.checkInFrom,
-        checkInUntil: campaign?.checkInUntil,
-      },
-    });
-    await tx.application.update({ where: { id: applicationId }, data: { status: "SETTLED" } });
-    await notify(
-      tx,
-      application.applicant.userId,
-      "Назначено место в общежитии",
-      `${bed.room.building.name}, комната ${bed.room.number}, койка ${bed.number}. Направление ${orderNumber}.`,
-    );
-    await writeAudit(tx, userId, "Ручное назначение", "Settlement", settlement.id, {
-      name: fullName(application.applicant),
-      building: bed.room.building.name,
-      room: bed.room.number,
-      bed: bed.number,
-    });
-    return settlement;
-  });
-}
-
-export async function moveSettlement(userId: string, settlementId: string, bedId: string) {
-  return prisma.$transaction(async (tx) => {
-    const settlement = await tx.settlement.findUnique({
-      where: { id: settlementId },
-      include: { application: { include: { applicant: true } }, bed: true },
-    });
-    if (!settlement) throw new HttpError(404, "Назначение не найдено");
-    if (settlement.bedId === bedId) throw new HttpError(400, "Это та же койка");
-    const gender = settlement.application.applicant.gender;
-    if (gender !== "MALE" && gender !== "FEMALE") throw new HttpError(400, "В анкете не указан пол");
-    const bed = await takeBed(tx, bedId, gender);
-    await tx.bed.update({ where: { id: settlement.bedId }, data: { status: "FREE" } });
-    const updated = await tx.settlement.update({
-      where: { id: settlementId },
-      data: { bedId, method: "MANUAL", assignedById: userId },
-    });
-    await notify(
-      tx,
-      settlement.application.applicant.userId,
-      "Место в общежитии изменено",
-      `${bed.room.building.name}, комната ${bed.room.number}, койка ${bed.number}. Направление ${settlement.orderNumber}.`,
-    );
-    await writeAudit(tx, userId, "Переселение", "Settlement", settlement.id, {
-      name: fullName(settlement.application.applicant),
-      building: bed.room.building.name,
-      room: bed.room.number,
-      bed: bed.number,
-    });
-    return updated;
-  });
-}
-
-export async function unassignSettlement(userId: string, settlementId: string) {
-  return prisma.$transaction(async (tx) => {
-    const settlement = await tx.settlement.findUnique({
-      where: { id: settlementId },
-      include: { application: { include: { applicant: true } } },
-    });
-    if (!settlement) throw new HttpError(404, "Назначение не найдено");
-    await tx.bed.update({ where: { id: settlement.bedId }, data: { status: "FREE" } });
-    await tx.application.update({ where: { id: settlement.applicationId }, data: { status: "APPROVED" } });
-    await tx.settlement.delete({ where: { id: settlementId } });
-    await notify(
-      tx,
-      settlement.application.applicant.userId,
-      "Назначение места отменено",
-      `Направление ${settlement.orderNumber} отозвано. Заявка снова в статусе «Допуск».`,
-    );
-    await writeAudit(tx, userId, "Снятие с места", "Settlement", settlementId, {
-      name: fullName(settlement.application.applicant),
-      orderNumber: settlement.orderNumber,
-    });
-  });
 }
 
 type LayoutBed = {
@@ -519,12 +396,6 @@ export async function saveHousingLayout(userId: string, buildingId: string, room
         },
       });
       await tx.application.update({ where: { id: application.id }, data: { status: "SETTLED" } });
-      await notify(
-        tx,
-        application.applicant.userId,
-        keptOrders.has(application.id) ? "Место в общежитии изменено" : "Назначено место в общежитии",
-        `${building.name}, комната ${bed.room.number}, койка ${bed.number}. Направление ${orderNumber}.`,
-      );
       await writeAudit(tx, userId, keptOrders.has(application.id) ? "Переселение" : "Ручное назначение", "Settlement", settlement.id, {
         name: fullName(application.applicant),
         building: building.name,
@@ -541,7 +412,6 @@ export async function saveHousingLayout(userId: string, buildingId: string, room
         include: { applicant: true },
       });
       if (!application) continue;
-      await notify(tx, application.applicant.userId, "Назначение места отменено", `Направление ${settlement.orderNumber} отозвано.`);
       await writeAudit(tx, userId, "Снятие с места", "Settlement", settlement.id, {
         name: fullName(application.applicant),
         orderNumber: settlement.orderNumber,

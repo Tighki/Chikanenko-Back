@@ -89,8 +89,8 @@ async function main() {
   await addRoom(hostel.id, "MALE", "101", 1, true, 2);
   await addRoom(hostel.id, "MALE", "102", 1, false, 2);
   await addRoom(hostel.id, "MALE", "201", 2, false, 2);
-  await addRoom(hostel.id, "FEMALE", "301", 1, true, 2);
-  await addRoom(hostel.id, "FEMALE", "302", 1, false, 2);
+  await addRoom(hostel.id, "FEMALE", "103", 1, true, 2);
+  await addRoom(hostel.id, "FEMALE", "104", 1, false, 2);
 
   await prisma.auditLog.create({
     data: {

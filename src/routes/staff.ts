@@ -7,7 +7,7 @@ import { institute } from "../domain/distance.js";
 import { missingDocumentLabels, fullName } from "../domain/labels.js";
 import { isDocumentType, profileProblems } from "../domain/profile.js";
 import { uploadDocument } from "../middleware/upload.js";
-import { notify, writeAudit } from "../services/audit.js";
+import { writeAudit } from "../services/audit.js";
 
 const reviewSchema = z.object({
   status: z.enum(["IN_REVIEW", "APPROVED", "REJECTED"]),
@@ -164,17 +164,6 @@ staffRouter.post(
         submittedAt: application.submittedAt ?? new Date(),
       },
     });
-    const titles = {
-      IN_REVIEW: "Заявка взята на проверку",
-      APPROVED: "Заявка допущена к заселению",
-      REJECTED: "В заселении отказано",
-    };
-    await notify(
-      prisma,
-      application.applicant.userId,
-      titles[body.status],
-      body.staffComment || "Статус заявки изменён сотрудником общежития.",
-    );
     await writeAudit(prisma, req.user!.id, "Смена статуса заявки", "Application", application.id, {
       status: body.status,
       name: fullName(application.applicant),

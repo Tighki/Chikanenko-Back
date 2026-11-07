@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import { authRouter } from "./routes/auth.js";
-import { notificationRouter } from "./routes/notifications.js";
 import { documentRouter } from "./routes/documents.js";
 import { staffRouter } from "./routes/staff.js";
 import { housingRouter } from "./routes/housing.js";
@@ -20,7 +19,6 @@ app.get("/api/health", (_req, res) => {
 });
 app.use("/api/auth", authRouter);
 app.use("/api/campaign", campaignRouter);
-app.use("/api/notifications", notificationRouter);
 app.use("/api/documents", documentRouter);
 app.use("/api/staff", staffRouter);
 app.use("/api/housing", housingRouter);

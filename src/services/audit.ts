@@ -20,9 +20,3 @@ export function writeAudit(
     },
   });
 }
-
-export function notify(db: Db, userId: string, title: string, body: string) {
-  return db.notification.create({
-    data: { userId, title, body },
-  });
-}
